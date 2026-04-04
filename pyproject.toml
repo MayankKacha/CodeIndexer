@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-indexer"
+version = "1.0.0"
+description = "Advanced code indexing platform with Graph + Hybrid Search + Re-ranking + Query-aware Compression + Caching"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "CodeIndexer Team"}
+]
+
+dependencies = [
+    # Code parsing
+    "tree-sitter>=0.21.0",
+    "tree-sitter-language-pack>=0.6.0",
+
+    # Graph database
+    "neo4j>=5.15.0",
+    "networkx>=3.0",
+
+    # Vector database
+    "pymilvus[milvus_lite]>=2.4.0",
+
+    # ML / Embeddings
+    "transformers>=4.35.0",
+    "torch>=2.0.0",
+    "sentence-transformers>=2.2.0",
+
+    # BM25 search
+    "rank-bm25>=0.2.2",
+
+    # OpenAI
+    "openai>=1.0.0",
+
+    # API server
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+
+    # CLI
+    "typer[all]>=0.9.0",
+    "rich>=13.7.0",
+
+    # Git
+    "gitpython>=3.1.40",
+
+    # File watching
+    "watchdog>=3.0.0",
+
+    # Caching
+    "diskcache>=5.6.0",
+
+    # Config
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+
+    # Utilities
+    "numpy>=1.24.0",
+    "tiktoken>=0.5.0",
+    "pathspec>=0.12.1",
+
+    # UI & Evaluation
+    "streamlit>=1.30.0",
+    "altair>=5.0.0",
+    "pandas>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.25.0",
+]
+
+[project.scripts]
+codeindexer = "code_indexer.cli.cli_app:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
