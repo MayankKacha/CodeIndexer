@@ -18,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from code_indexer.api import metrics as _metrics
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -35,6 +37,49 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Map URL routes to canonical tool names so /api/mcp/get-callers and the
+# stdio MCP wrapper share metrics.
+_ROUTE_TO_TOOL = {
+    "/api/mcp/overview": "codebase_overview",
+    "/api/mcp/search": "search_code",
+    "/api/mcp/find-symbol": "find_symbol",
+    "/api/mcp/get-code": "get_code",
+    "/api/mcp/get-callers": "get_callers",
+    "/api/mcp/get-callees": "get_callees",
+    "/api/mcp/get-impact": "get_impact",
+    "/api/mcp/get-call-chain": "get_call_chain",
+    "/api/mcp/file-structure": "get_file_structure",
+    "/api/mcp/dead-code": "find_dead_code",
+    "/api/mcp/tests-for": "tests_for",
+    "/api/mcp/tested-by": "tested_by",
+    "/api/diff/impact": "diff_impact",
+    "/api/index/file": "index_file",
+    "/api/search": "search",
+}
+
+
+@app.middleware("http")
+async def _metrics_middleware(request: Request, call_next):
+    """Record latency for instrumented routes; pass everything else through."""
+    tool = _ROUTE_TO_TOOL.get(request.url.path)
+    if tool is None:
+        return await call_next(request)
+
+    start = time.perf_counter()
+    error = False
+    try:
+        response = await call_next(request)
+        if response.status_code >= 500:
+            error = True
+        return response
+    except Exception:
+        error = True
+        raise
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        _metrics.record(tool, elapsed_ms, error=error)
 
 # ── Global pipeline instance ───────────────────────────────────────────
 _pipeline = None
@@ -89,6 +134,18 @@ async def health():
     }
 
 
+@app.get("/api/metrics", tags=["Health"])
+async def metrics():
+    """Per-tool latency snapshot.
+
+    Returns p50/p95/p99/count/error stats per instrumented endpoint, plus
+    a simple `over_budget` flag so dashboards (or the LLM itself) can spot
+    pathological tools at a glance. Stats are an in-memory rolling window
+    of the last 1000 calls per tool.
+    """
+    return {"tools": _metrics.snapshot()}
+
+
 # ── Indexing with SSE Progress ─────────────────────────────────────────
 
 
@@ -138,6 +195,52 @@ async def index_codebase(request: IndexRequest):
         await task
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ── Diff-aware impact analysis ────────────────────────────────────────
+
+
+class DiffImpactRequest(BaseModel):
+    repo_name: str = Field(..., description="Repository name")
+    diff_text: str = Field(default="", description="Unified diff text. If empty, base_ref is used.")
+    base_ref: str = Field(default="", description="Git ref to diff against (e.g. main, HEAD~1)")
+    head_ref: str = Field(default="HEAD", description="Git ref of the proposed state")
+    max_depth: int = Field(default=3, description="Transitive caller depth")
+
+
+@app.post("/api/diff/impact", tags=["Graph"])
+async def diff_impact_endpoint(request: DiffImpactRequest):
+    """Map a diff to the code elements it touches, then run impact analysis.
+
+    Accepts either a raw unified-diff string or a (base_ref, head_ref) pair
+    that resolves to `git diff base..head` in the repository's local clone.
+    Returns the list of files touched, the indexed elements whose line ranges
+    overlap the change, and per-element transitive caller closures.
+    """
+    from code_indexer.api.diff_impact import diff_impact as _diff_impact
+
+    pipeline = get_pipeline()
+    meta = pipeline.cache.get_repo_metadata(request.repo_name)
+    repo_path: Optional[str] = None
+    if meta:
+        repo_path = meta.get("stats", {}).get("local_repo_path") or None
+
+    try:
+        return await asyncio.to_thread(
+            _diff_impact,
+            pipeline=pipeline,
+            repo_name=request.repo_name,
+            diff_text=request.diff_text or None,
+            repo_path=repo_path,
+            base_ref=request.base_ref or None,
+            head_ref=request.head_ref or "HEAD",
+            max_depth=request.max_depth,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"diff impact failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Per-file incremental reindex ──────────────────────────────────────
@@ -621,6 +724,37 @@ async def mcp_get_callees(request: SymbolRequest):
             "callees": callees,
             "total": len(callees),
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 6b. Tests for / Tested by (test ↔ source coverage) ────────────────
+
+@app.post("/api/mcp/tests-for", tags=["MCP"])
+async def mcp_tests_for(request: SymbolRequest):
+    """Find tests that exercise the source element `name`.
+
+    Walks `TESTS` edges directly (no transitive closure). Useful for
+    "what tests should I run if I change this function?" queries.
+    """
+    try:
+        pipeline = get_pipeline()
+        tests = pipeline.graph_queries.tests_for(request.name, request.repo_name)
+        return {"target": request.name, "tests": tests, "total": len(tests)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mcp/tested-by", tags=["MCP"])
+async def mcp_tested_by(request: SymbolRequest):
+    """Find source elements exercised by the test `name`.
+
+    Mirror of tests-for: given a test, what production code does it cover?
+    """
+    try:
+        pipeline = get_pipeline()
+        covers = pipeline.graph_queries.tested_by(request.name, request.repo_name)
+        return {"test": request.name, "covers": covers, "total": len(covers)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

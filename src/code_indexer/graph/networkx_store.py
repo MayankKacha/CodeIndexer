@@ -145,7 +145,7 @@ class NetworkxStore:
                     self.graph.add_edge(el.parent_element_id, el.element_id, key="HAS_METHOD", type="HAS_METHOD")
                     rels_created += 1
 
-            # Calls
+            # Calls (and TESTS edges when the source is a test element)
             for call_name in el.calls:
                 target_id = element_by_name.get(call_name)
                 if not target_id:
@@ -157,6 +157,14 @@ class NetworkxStore:
                     if not self.graph.has_edge(el.element_id, target_id, key="CALLS"):
                         self.graph.add_edge(el.element_id, target_id, key="CALLS", type="CALLS")
                         rels_created += 1
+                    if el.is_test:
+                        target_data = self.graph.nodes.get(target_id, {})
+                        if not target_data.get("is_test"):
+                            if not self.graph.has_edge(el.element_id, target_id, key="TESTS"):
+                                self.graph.add_edge(
+                                    el.element_id, target_id, key="TESTS", type="TESTS"
+                                )
+                                rels_created += 1
 
             # Inherits
             if el.element_type == "class" and el.inherits_from:
@@ -196,6 +204,7 @@ class NetworkxStore:
             "parent_class": el.parent_class or "",
             "complexity": el.complexity,
             "line_count": el.line_count,
+            "is_test": getattr(el, "is_test", False),
         }
 
     def list_repositories(self) -> List[Dict[str, Any]]:

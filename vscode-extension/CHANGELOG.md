@@ -2,6 +2,20 @@
 
 All notable changes to CodeIndexer MCP are documented here.
 
+## [0.2.1] — 2026-04-26
+
+### Added
+- **3 new MCP tools** wired to new Python endpoints:
+  - `tests_for` — given a source symbol, list the tests that cover it (walks `TESTS` edges).
+  - `tested_by` — given a test, list the source it exercises.
+  - `diff_impact` — given a unified diff or `(base_ref, head_ref)`, return the indexed elements whose line ranges overlap the change plus a per-target caller closure. Designed for PR-review agents.
+- **Per-tool latency metrics** — `/api/metrics` returns p50/p95/p99/error counts per instrumented endpoint over a rolling 1000-call window. Calls that exceed a per-tool budget log a warning; the response carries an `over_budget` flag so dashboards (or the LLM itself) can spot pathological tools.
+- **Test→source coverage edges** — `is_test` is now stamped on `CodeElement`s parsed from files matching `test_*.py`, `*_test.py`, `*Test.java`, `*Tests.cs`, `*.test.{js,ts}`, `*.spec.{js,ts}`, `*_test.go`, `*IT.java`, or located under `/tests/`, `/test/`, `/__tests__/`, `/spec/`, `/src/test/`. The graph store emits `TESTS` edges from test→source on top of the existing `CALLS` edges.
+- **Marketplace metadata** rewritten — new display name and description that reads as a value prop ("answer 'what calls this?' with grounded citations — not vibes") and an expanded keyword set that surfaces under MCP / Claude / Cursor searches.
+
+### Changed
+- The MCP server now advertises 13 tools instead of 10.
+
 ## [0.2.0] — 2026-04-26
 
 ### Added

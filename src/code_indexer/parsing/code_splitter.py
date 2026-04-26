@@ -8,6 +8,7 @@ a flat list of indexed code elements from an entire codebase.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import List
 
@@ -19,6 +20,43 @@ from code_indexer.parsing.language_detector import (
 from code_indexer.parsing.models import CodeElement, ParsedFile
 
 logger = logging.getLogger(__name__)
+
+
+# Test-file heuristics. Conservatively false-negative-friendly: we'd rather
+# under-tag than mislabel production code as a test. LSP integration (later)
+# will refine this with framework-level signals (pytest collection, JUnit
+# annotations, MSTest attributes).
+_TEST_FILENAME_RES = [
+    re.compile(r"^test_[^/\\]+\.py$"),         # pytest
+    re.compile(r"^[^/\\]+_test\.py$"),         # alt pytest convention
+    re.compile(r"^[^/\\]+\.test\.[jt]sx?$"),   # jest / vitest
+    re.compile(r"^[^/\\]+\.spec\.[jt]sx?$"),   # jasmine / mocha / vitest
+    re.compile(r"^[^/\\]+Test\.java$"),        # JUnit
+    re.compile(r"^[^/\\]+Tests\.java$"),       # JUnit (plural)
+    re.compile(r"^[^/\\]+IT\.java$"),          # Failsafe integration tests
+    re.compile(r"^[^/\\]+Tests?\.cs$"),        # xUnit / NUnit / MSTest
+    re.compile(r"^[^/\\]+_test\.go$"),         # go test
+]
+
+_TEST_DIR_FRAGMENTS = (
+    "/tests/", "/test/", "/__tests__/", "/spec/",
+    "/src/test/",        # maven / gradle convention
+)
+
+
+def is_test_file(file_path: str | Path) -> bool:
+    """Return True when `file_path` looks like a test source file.
+
+    Pure heuristic: filename + path conventions used by the major test
+    frameworks for the languages we parse. Not a substitute for framework
+    introspection (pytest collection, JUnit annotations, etc.).
+    """
+    p = Path(file_path)
+    name = p.name
+    if any(rx.match(name) for rx in _TEST_FILENAME_RES):
+        return True
+    norm = "/" + str(p).replace("\\", "/").lstrip("/") + "/"
+    return any(frag in norm for frag in _TEST_DIR_FRAGMENTS)
 
 
 def split_file(
@@ -59,9 +97,12 @@ def split_file(
             language=language,
             repo_name=repo_name,
         )
-        # Update file paths to be relative
+        # Update file paths to be relative + tag test elements
+        is_test = is_test_file(relative_path)
         for el in elements:
             el.file_path = relative_path
+            if is_test:
+                el.is_test = True
 
         return ParsedFile(
             file_path=relative_path,

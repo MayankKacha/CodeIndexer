@@ -51,6 +51,9 @@ class CodeElement:
     complexity: int = 0                 # Cyclomatic complexity estimate
     line_count: int = 0                 # Number of lines
 
+    # ── Test affinity ───────────────────────────────────────────────────
+    is_test: bool = False               # True when the source file is a test
+
     def __post_init__(self):
         """Generate ID and compute derived fields."""
         if not self.element_id:
@@ -125,6 +128,7 @@ class CodeElement:
             "parent_class": self.parent_class,
             "complexity": self.complexity,
             "repo_name": self.repo_name,
+            "is_test": self.is_test,
         }
 
     def to_context_string(self) -> str:

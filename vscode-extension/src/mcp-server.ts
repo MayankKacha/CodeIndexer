@@ -507,6 +507,134 @@ Useful for code cleanup and understanding which code is actually used.`,
     }
 );
 
+// ═══════════════════════════════════════════════════════════════════════
+// TOOL 11: Tests For (which tests cover this source element?)
+// ═══════════════════════════════════════════════════════════════════════
+
+server.registerTool(
+    'tests_for',
+    {
+        description: `Find the tests that exercise a source function/method/class.
+
+Walks TESTS edges built from heuristically-detected test files (test_*.py,
+*Test.java, *Tests.cs, *.test.ts, *.spec.ts, /tests/, /src/test/). Use this
+to answer "which tests should I run if I change X?" without re-running the
+full test suite.`,
+        inputSchema: {
+            name: z.string().describe('Source function/method/class name to find tests for'),
+            repo_name: z.string().optional().describe('Filter by repository name'),
+        },
+    },
+    async ({ name, repo_name }) => {
+        try {
+            const res = await apiRequest('POST', '/api/mcp/tests-for', {
+                name, repo_name: repo_name || '',
+            });
+            if (res.status !== 200) return error(`Failed: ${JSON.stringify(res.data)}`);
+
+            const tests = res.data.tests || [];
+            if (tests.length === 0) return text(`No tests found that exercise "${name}". This source may be untested or its tests aren't in a recognised test file/path.`);
+
+            const lines = tests.map((t: any, i: number) =>
+                `${i + 1}. **${t.test_qualified_name || t.test_name}** — ${t.test_file}:${t.test_line}`
+            ).join('\n');
+
+            return text(`## Tests covering "${name}" — ${tests.length} found\n\n${lines}`);
+        } catch (err: any) { return error(err.message); }
+    }
+);
+
+// ═══════════════════════════════════════════════════════════════════════
+// TOOL 12: Tested By (what does this test cover?)
+// ═══════════════════════════════════════════════════════════════════════
+
+server.registerTool(
+    'tested_by',
+    {
+        description: `Given a test name, list the source elements it exercises.
+
+Mirror of tests_for. Useful when reviewing a test to understand what
+production code it actually touches.`,
+        inputSchema: {
+            name: z.string().describe('Test function/method name'),
+            repo_name: z.string().optional().describe('Filter by repository name'),
+        },
+    },
+    async ({ name, repo_name }) => {
+        try {
+            const res = await apiRequest('POST', '/api/mcp/tested-by', {
+                name, repo_name: repo_name || '',
+            });
+            if (res.status !== 200) return error(`Failed: ${JSON.stringify(res.data)}`);
+
+            const covers = res.data.covers || [];
+            if (covers.length === 0) return text(`Test "${name}" doesn't cover any tracked source elements (it may only call test helpers).`);
+
+            const lines = covers.map((c: any, i: number) =>
+                `${i + 1}. **${c.qualified_name || c.name}** (${c.element_type}) — ${c.file_path}:${c.start_line}`
+            ).join('\n');
+
+            return text(`## Source covered by "${name}" — ${covers.length} elements\n\n${lines}`);
+        } catch (err: any) { return error(err.message); }
+    }
+);
+
+// ═══════════════════════════════════════════════════════════════════════
+// TOOL 13: Diff Impact (what does a diff/PR touch?)
+// ═══════════════════════════════════════════════════════════════════════
+
+server.registerTool(
+    'diff_impact',
+    {
+        description: `Map a unified diff (or a git ref range) to the indexed code
+elements it touches, then run impact analysis on each. Returns the files
+touched, the elements whose line ranges overlap the change, and a per-target
+caller closure. Pass either diff_text OR base_ref (head_ref defaults to HEAD).`,
+        inputSchema: {
+            repo_name: z.string().describe('Repository name'),
+            diff_text: z.string().optional().describe('Unified-diff text. If omitted, base_ref must be provided.'),
+            base_ref: z.string().optional().describe('Git ref to diff against, e.g. "main" or "HEAD~1"'),
+            head_ref: z.string().optional().describe('Head git ref (default: HEAD)'),
+            max_depth: z.number().optional().describe('Transitive caller depth (default: 3)'),
+        },
+    },
+    async ({ repo_name, diff_text, base_ref, head_ref, max_depth }) => {
+        try {
+            const res = await apiRequest('POST', '/api/diff/impact', {
+                repo_name,
+                diff_text: diff_text || '',
+                base_ref: base_ref || '',
+                head_ref: head_ref || 'HEAD',
+                max_depth: max_depth ?? 3,
+            });
+            if (res.status !== 200) return error(`Failed: ${JSON.stringify(res.data)}`);
+
+            const data = res.data;
+            const files = data.files_touched || [];
+            const elements = data.elements_changed || [];
+            const impacts = data.impact || [];
+
+            const filesBlock = files.length
+                ? `**Files touched (${files.length}):** ${files.join(', ')}\n`
+                : '_No files touched._\n';
+
+            const elementsBlock = elements.length
+                ? '\n**Elements overlapping changes:**\n' + elements.map((e: any, i: number) =>
+                    `${i + 1}. ${e.qualified_name || e.name} (${e.element_type}) — ${e.file_path}:${e.start_line}-${e.end_line}`
+                ).join('\n') + '\n'
+                : '\n_No indexed elements overlap the changed lines._\n';
+
+            const impactBlock = impacts.length
+                ? '\n**Impact closure:**\n' + impacts.map((imp: any, i: number) =>
+                    `${i + 1}. ${imp.target}: ${imp.direct_callers} direct, ${imp.total_affected} total — ${(imp.affected_files || []).length} files`
+                ).join('\n')
+                : '';
+
+            return text(`## Diff Impact for "${repo_name}"\n\n${filesBlock}${elementsBlock}${impactBlock}`);
+        } catch (err: any) { return error(err.message); }
+    }
+);
+
 // ── Start ─────────────────────────────────────────────────────────────
 
 async function main() {

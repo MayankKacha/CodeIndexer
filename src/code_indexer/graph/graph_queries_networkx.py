@@ -190,6 +190,76 @@ class GraphQueriesNetworkx:
             })
         return sorted(results, key=lambda x: (x.get("file_path", ""), x.get("start_line", 0)))
 
+    # ── Test ↔ Source coverage ──────────────────────────────────────────
+
+    def tests_for(self, name: str, repo_name: str = "") -> List[Dict]:
+        """Return test elements that exercise the source element `name`.
+
+        Walks `TESTS` in-edges only — direct connections, not transitive,
+        because pytest fixtures and test helpers shouldn't be reported as
+        "tests" for the underlying source.
+        """
+        targets = [
+            n for n, d in self.graph.nodes(data=True)
+            if (d.get("name") == name or d.get("qualified_name") == name)
+            and (not repo_name or d.get("repo_name") == repo_name)
+        ]
+        seen: set = set()
+        results: List[Dict] = []
+        for target in targets:
+            for u, _v, _key, edge_data in self.graph.in_edges(target, data=True, keys=True):
+                if edge_data.get("type") != "TESTS":
+                    continue
+                test_data = self.graph.nodes[u]
+                key = (
+                    test_data.get("qualified_name") or test_data.get("name"),
+                    test_data.get("file_path"),
+                    test_data.get("start_line"),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append({
+                    "test_name": test_data.get("name"),
+                    "test_qualified_name": test_data.get("qualified_name"),
+                    "test_file": test_data.get("file_path"),
+                    "test_line": test_data.get("start_line"),
+                    "covers": self.graph.nodes[target].get("name"),
+                })
+        return sorted(results, key=lambda r: (r.get("test_file", ""), r.get("test_line", 0)))
+
+    def tested_by(self, test_name: str, repo_name: str = "") -> List[Dict]:
+        """Return source elements exercised by the test `test_name`."""
+        sources = [
+            n for n, d in self.graph.nodes(data=True)
+            if (d.get("name") == test_name or d.get("qualified_name") == test_name)
+            and d.get("is_test")
+            and (not repo_name or d.get("repo_name") == repo_name)
+        ]
+        seen: set = set()
+        results: List[Dict] = []
+        for src in sources:
+            for _u, v, _key, edge_data in self.graph.out_edges(src, data=True, keys=True):
+                if edge_data.get("type") != "TESTS":
+                    continue
+                tgt_data = self.graph.nodes[v]
+                key = (
+                    tgt_data.get("qualified_name") or tgt_data.get("name"),
+                    tgt_data.get("file_path"),
+                    tgt_data.get("start_line"),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append({
+                    "name": tgt_data.get("name"),
+                    "qualified_name": tgt_data.get("qualified_name"),
+                    "element_type": tgt_data.get("element_type"),
+                    "file_path": tgt_data.get("file_path"),
+                    "start_line": tgt_data.get("start_line"),
+                })
+        return sorted(results, key=lambda r: (r.get("file_path", ""), r.get("start_line", 0)))
+
     # ── Impact Analysis ─────────────────────────────────────────────────
 
     def impact_analysis(self, name: str, max_depth: int = 3) -> Dict[str, Any]:

@@ -1,8 +1,8 @@
 {
   "name": "codeindexer-mcp",
-  "displayName": "CodeIndexer MCP",
-  "description": "Auto-indexing code intelligence for VS Code: hybrid search, graph traversal, impact analysis, and RAG over your codebase via MCP.",
-  "version": "0.2.0",
+  "displayName": "CodeIndexer — Code Graph & Impact Analysis for AI",
+  "description": "Self-hosted code intelligence over MCP. Indexes your repo into a hybrid graph + vector + keyword index so Copilot, Claude, and Cursor can answer 'what calls this?', 'what breaks if I change X?', and 'where do I add Redis?' with grounded citations — not vibes. Auto-indexes on open, reindexes on save, ships with a bundled Python venv (zero manual install).",
+  "version": "0.2.1",
   "publisher": "MayankKacha",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -16,14 +16,25 @@
   "homepage": "https://github.com/codeindexer/codeindexer#readme",
   "keywords": [
     "mcp",
+    "model context protocol",
     "code search",
     "semantic search",
+    "hybrid search",
     "code graph",
-    "code indexer",
+    "call graph",
+    "impact analysis",
+    "dead code",
+    "rag",
     "ai",
     "llm",
     "copilot",
-    "model context protocol"
+    "claude",
+    "cursor",
+    "agent",
+    "self-hosted",
+    "tree-sitter",
+    "bm25",
+    "vector search"
   ],
   "engines": {
     "vscode": "^1.99.0"
