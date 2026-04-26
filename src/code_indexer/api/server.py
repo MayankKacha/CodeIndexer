@@ -16,14 +16,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-# Import comparison router
-from code_indexer.api.comparison import router as comparison_router
 
 app = FastAPI(
     title="CodeIndexer API",
@@ -40,9 +35,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Register comparison router
-app.include_router(comparison_router)
 
 # ── Global pipeline instance ───────────────────────────────────────────
 _pipeline = None
@@ -64,7 +56,6 @@ class IndexRequest(BaseModel):
     path: str = Field(..., description="Local directory path or GitHub URL")
     repo_name: str = Field(default="", description="Optional repository name")
     generate_descriptions: bool = Field(default=True, description="Generate LLM descriptions")
-    index_with_cgc: bool = Field(default=False, description="Also index with CodeGraphContext")
 
 
 class SearchRequest(BaseModel):
@@ -126,46 +117,6 @@ async def index_codebase(request: IndexRequest):
                 )
                 
                 stats_dict = stats.to_dict()
-                
-                # Check if we should also index with CodeGraphContext
-                if request.index_with_cgc and stats.local_repo_path:
-                    progress_events.put_nowait({"step": "cgc_start", "message": "Starting CodeGraphContext partitioning & indexing...", "data": {}})
-                    cgc_start = time.time()
-                    try:
-                        import subprocess
-                        import sys
-                        import os
-                        env = os.environ.copy()
-                        env["DATABASE_TYPE"] = "kuzudb"
-                        
-                        # Find the cgc executable in the current python env
-                        cgc_exe = os.path.join(os.path.dirname(sys.executable), "cgc")
-                        if not os.path.exists(cgc_exe):
-                            # Fallback just in case
-                            cgc_exe = "cgc"
-                            
-                        process = await asyncio.to_thread(
-                            subprocess.run,
-                            [cgc_exe, "index", stats.local_repo_path],
-                            env=env,
-                            cwd=stats.local_repo_path,
-                            capture_output=True,
-                            text=True,
-                            check=False
-                        )
-                        cgc_time = time.time() - cgc_start
-                        
-                        if process.returncode != 0:
-                            logger.error(f"CGC indexing failed: {process.stderr}")
-                            progress_events.put_nowait({"step": "error", "message": f"CodeGraphContext indexing failed ({cgc_time:.1f}s)", "data": {"stderr": process.stderr}})
-                        else:
-                            stats_dict["cgc_indexing_time_seconds"] = round(cgc_time, 2)
-                            progress_events.put_nowait({"step": "cgc_done", "message": f"CodeGraphContext indexed successfully in {cgc_time:.1f}s", "data": {"seconds": cgc_time}})
-                            
-                    except Exception as e:
-                        logger.error(f"Failed to run CGC indexing: {e}")
-                        progress_events.put_nowait({"step": "error", "message": f"CGC Error: {str(e)}", "data": {}})
-                
                 progress_events.put_nowait({"step": "done", "message": "Indexing finished.", "data": stats_dict})
             except Exception as e:
                 logger.error(f"Indexing failed: {e}")
@@ -352,23 +303,383 @@ async def impact_analysis(request: GraphQueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Serve React Static Files (Production) ─────────────────────────────
+# ── MCP Support Endpoints ──────────────────────────────────────────────
+# Design: Each endpoint does ONE thing and returns MINIMAL data.
+# "Discovery" endpoints return metadata only (names, locations, signatures).
+# "Content" endpoints return actual source code.
+# This lets LLMs conserve context window by fetching code only when needed.
 
-_web_dist = Path(__file__).resolve().parent.parent.parent.parent / "web" / "dist"
-if _web_dist.exists():
-    # Serve static assets (JS, CSS, images)
-    app.mount("/assets", StaticFiles(directory=str(_web_dist / "assets")), name="assets")
 
-    # SPA catch-all: serve index.html for any non-API route
-    from fastapi.responses import FileResponse
+class SymbolRequest(BaseModel):
+    name: str = Field(..., description="Exact or partial function/class name")
+    repo_name: str = Field(default="", description="Filter by repository")
 
-    @app.get("/{full_path:path}", tags=["SPA"])
-    async def serve_spa(full_path: str):
-        """Serve the React SPA for all non-API routes."""
-        # Check if this is a real static file
-        file_path = _web_dist / full_path
-        if full_path and file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
-        # Otherwise serve index.html (React Router handles routing)
-        return FileResponse(str(_web_dist / "index.html"))
+
+class CallChainRequest(BaseModel):
+    from_name: str = Field(..., description="Source function name")
+    to_name: str = Field(..., description="Target function name")
+    max_depth: int = Field(default=10, description="Maximum call chain depth")
+
+
+class FileStructureRequest(BaseModel):
+    file_path: str = Field(..., description="File path (relative or absolute)")
+    repo_name: str = Field(default="", description="Filter by repository")
+
+
+# ── 1. Codebase Overview ───────────────────────────────────────────────
+
+@app.get("/api/mcp/overview", tags=["MCP"])
+async def codebase_overview(repo_name: str = ""):
+    """Get a compact codebase overview: repos, stats, languages, semantic confidence.
+
+    This is the FIRST tool an LLM should call to understand the codebase.
+    Returns everything needed to decide which other tools to use.
+    """
+    try:
+        pipeline = get_pipeline()
+        all_meta = pipeline.cache.get_all_repo_metadata()
+        store = pipeline.graph_store
+
+        repos = []
+        for meta in all_meta:
+            rn = meta.get("repo_name", "")
+            if repo_name and rn != repo_name:
+                continue
+            s = meta.get("stats", {})
+
+            # Compute semantic confidence
+            total = 0
+            with_docs = 0
+            for _, d in store.graph.nodes(data=True):
+                if d.get("label") == "Repository":
+                    continue
+                if d.get("repo_name") != rn:
+                    continue
+                if d.get("element_type") not in ("function", "method", "class"):
+                    continue
+                total += 1
+                docstring = d.get("docstring", "") or ""
+                description = d.get("description", "") or ""
+                if len(docstring.strip()) > 10 or len(description.strip()) > 10:
+                    with_docs += 1
+
+            confidence = round(with_docs / total, 4) if total > 0 else 0.0
+
+            repos.append({
+                "repo_name": rn,
+                "indexed_at": meta.get("indexed_at", ""),
+                "total_elements": s.get("total_elements", 0),
+                "functions": s.get("functions", 0),
+                "methods": s.get("methods", 0),
+                "classes": s.get("classes", 0),
+                "total_files": s.get("total_files", 0),
+                "total_lines": s.get("total_lines", 0),
+                "languages": s.get("languages", {}),
+                "semantic_confidence": confidence,
+                "elements_with_docs": with_docs,
+            })
+
+        return {"repositories": repos}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 2. Search Code (semantic discovery — NO full code) ─────────────────
+
+@app.post("/api/mcp/search", tags=["MCP"])
+async def mcp_search(request: SearchRequest):
+    """Semantic search: find code by natural language description.
+
+    Returns COMPACT results: name, type, file, line, signature, description.
+    Does NOT return full source code (use get_code for that).
+    This keeps the response small so the LLM can decide which results to inspect.
+    """
+    try:
+        pipeline = get_pipeline()
+        candidates = pipeline.hybrid_search.search(
+            query=request.query,
+            top_k=request.top_k,
+            repo_name=request.repo_name,
+            use_bm25=True,
+            use_vector=True,
+            use_graph=False,
+            rerank=request.use_reranker,
+        )
+        if request.use_reranker and len(candidates) > 1:
+            try:
+                results = pipeline.reranker.rerank(
+                    query=request.query, results=candidates, top_k=request.top_k
+                )
+            except Exception:
+                results = candidates[: request.top_k]
+        else:
+            results = candidates[: request.top_k]
+
+        # Strip full code from results — return compact metadata only
+        compact = []
+        for r in results:
+            compact.append({
+                "name": r.get("name", ""),
+                "qualified_name": r.get("qualified_name", ""),
+                "element_type": r.get("element_type", ""),
+                "file_path": r.get("file_path", ""),
+                "start_line": r.get("start_line", 0),
+                "end_line": r.get("end_line", 0),
+                "language": r.get("language", ""),
+                "signature": r.get("signature", ""),
+                "description": r.get("description", ""),
+                "score": r.get("score", r.get("rrf_score", 0)),
+            })
+
+        return {"query": request.query, "results": compact, "total": len(compact)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 3. Find Symbol (exact/partial name lookup — NO full code) ──────────
+
+@app.post("/api/mcp/find-symbol", tags=["MCP"])
+async def mcp_find_symbol(request: SymbolRequest):
+    """Find code elements by exact or partial name.
+
+    Returns compact metadata: name, type, file, lines, signature.
+    Use this when you know the function/class name (or part of it).
+    """
+    try:
+        pipeline = get_pipeline()
+        gq = pipeline.graph_queries
+
+        # Try exact match first
+        exact = gq.find_by_name(request.name, request.repo_name)
+        # Then pattern match
+        pattern = gq.search_by_pattern(request.name, request.repo_name)
+
+        seen = set()
+        results = []
+
+        def add_node(node, match_type):
+            key = node.get("element_id", node.get("name", ""))
+            if key in seen:
+                return
+            seen.add(key)
+            results.append({
+                "name": node.get("name", ""),
+                "qualified_name": node.get("qualified_name", ""),
+                "element_type": node.get("element_type", ""),
+                "file_path": node.get("file_path", ""),
+                "start_line": node.get("start_line", 0),
+                "end_line": node.get("end_line", 0),
+                "language": node.get("language", ""),
+                "signature": node.get("signature", ""),
+                "description": node.get("description", ""),
+                "parent_class": node.get("parent_class", ""),
+                "complexity": node.get("complexity", 0),
+                "match_type": match_type,
+            })
+
+        for r in exact:
+            node = r.get("e", {})
+            if hasattr(node, "__getitem__"):
+                add_node(node, "exact")
+
+        for r in pattern:
+            node = r.get("e", {})
+            if hasattr(node, "__getitem__"):
+                add_node(node, "pattern")
+
+        return {"symbol": request.name, "results": results, "total": len(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 4. Get Code (retrieve actual source code) ─────────────────────────
+
+@app.post("/api/mcp/get-code", tags=["MCP"])
+async def mcp_get_code(request: SymbolRequest):
+    """Get the FULL source code of a specific function/class by name.
+
+    Use this AFTER using find-symbol or search to identify WHICH element you need.
+    Returns the complete source code, docstring, signature, and metadata.
+    """
+    try:
+        pipeline = get_pipeline()
+        gq = pipeline.graph_queries
+
+        matches = gq.find_by_name(request.name, request.repo_name)
+        if not matches:
+            # Fallback to pattern search
+            pattern = gq.search_by_pattern(request.name, request.repo_name)
+            matches = pattern
+
+        results = []
+        for r in matches:
+            node = r.get("e", {})
+            if hasattr(node, "__getitem__"):
+                results.append({
+                    "name": node.get("name", ""),
+                    "qualified_name": node.get("qualified_name", ""),
+                    "element_type": node.get("element_type", ""),
+                    "file_path": node.get("file_path", ""),
+                    "start_line": node.get("start_line", 0),
+                    "end_line": node.get("end_line", 0),
+                    "language": node.get("language", ""),
+                    "signature": node.get("signature", ""),
+                    "docstring": node.get("docstring", ""),
+                    "description": node.get("description", ""),
+                    "code": node.get("code", ""),
+                    "parent_class": node.get("parent_class", ""),
+                    "complexity": node.get("complexity", 0),
+                })
+
+        return {"symbol": request.name, "results": results, "total": len(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 5. Get Callers (who calls this?) ───────────────────────────────────
+
+@app.post("/api/mcp/get-callers", tags=["MCP"])
+async def mcp_get_callers(request: SymbolRequest):
+    """Find all direct callers of a function/method.
+
+    Returns: caller name, type, file, line. Compact — no source code.
+    """
+    try:
+        pipeline = get_pipeline()
+        callers = pipeline.find_callers(request.name, request.repo_name)
+        return {
+            "target": request.name,
+            "callers": callers,
+            "total": len(callers),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 6. Get Callees (what does this call?) ──────────────────────────────
+
+@app.post("/api/mcp/get-callees", tags=["MCP"])
+async def mcp_get_callees(request: SymbolRequest):
+    """Find all functions/methods called BY a given function.
+
+    Returns: callee name, type, file, line. Compact — no source code.
+    """
+    try:
+        pipeline = get_pipeline()
+        callees = pipeline.find_callees(request.name, request.repo_name)
+        return {
+            "source": request.name,
+            "callees": callees,
+            "total": len(callees),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 7. Get Impact Analysis ─────────────────────────────────────────────
+
+@app.post("/api/mcp/get-impact", tags=["MCP"])
+async def mcp_get_impact(request: SymbolRequest):
+    """Full impact analysis: what breaks if this function changes?
+
+    Returns direct callers, transitive callers, and all affected files.
+    This is the key tool for answering "what will be impacted if I change X?"
+    """
+    try:
+        pipeline = get_pipeline()
+        impact = pipeline.impact_analysis(request.name)
+        return impact
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 8. Get Call Chain ──────────────────────────────────────────────────
+
+@app.post("/api/mcp/get-call-chain", tags=["MCP"])
+async def mcp_get_call_chain(request: CallChainRequest):
+    """Find the call path between two functions (A → B → C → D).
+
+    Returns the shortest call chain connecting from_name to to_name.
+    """
+    try:
+        pipeline = get_pipeline()
+        chain = pipeline.find_call_chain(request.from_name, request.to_name)
+        return {
+            "from": request.from_name,
+            "to": request.to_name,
+            "chain": chain,
+            "found": len(chain) > 0,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 9. Get File Structure ─────────────────────────────────────────────
+
+@app.post("/api/mcp/file-structure", tags=["MCP"])
+async def mcp_file_structure(request: FileStructureRequest):
+    """List all functions, methods, and classes in a specific file.
+
+    Returns compact metadata (name, type, line numbers, signature).
+    Use this to understand the structure of a file before diving into specifics.
+    """
+    try:
+        pipeline = get_pipeline()
+        store = pipeline.graph_store
+
+        elements = []
+        for _, d in store.graph.nodes(data=True):
+            if d.get("label") == "Repository":
+                continue
+            node_file = d.get("file_path", "")
+            # Match if the requested path is a suffix of the stored path or vice versa
+            if not (node_file.endswith(request.file_path)
+                    or request.file_path.endswith(node_file)
+                    or node_file == request.file_path):
+                continue
+            if request.repo_name and d.get("repo_name") != request.repo_name:
+                continue
+            elements.append({
+                "name": d.get("name", ""),
+                "qualified_name": d.get("qualified_name", ""),
+                "element_type": d.get("element_type", ""),
+                "start_line": d.get("start_line", 0),
+                "end_line": d.get("end_line", 0),
+                "signature": d.get("signature", ""),
+                "parent_class": d.get("parent_class", ""),
+                "complexity": d.get("complexity", 0),
+                "has_docstring": bool((d.get("docstring", "") or "").strip()),
+            })
+
+        elements.sort(key=lambda x: x.get("start_line", 0))
+        return {
+            "file_path": request.file_path,
+            "elements": elements,
+            "total": len(elements),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 10. Find Dead Code ────────────────────────────────────────────────
+
+@app.post("/api/mcp/dead-code", tags=["MCP"])
+async def mcp_dead_code(request: SymbolRequest):
+    """Find potentially dead/unused functions and methods.
+
+    Returns functions that have zero callers in the code graph.
+    Useful for cleanup and understanding which code is actually used.
+    """
+    try:
+        pipeline = get_pipeline()
+        dead = pipeline.find_dead_code(request.repo_name)
+        return {
+            "repo_name": request.repo_name,
+            "dead_code": dead,
+            "total": len(dead),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 

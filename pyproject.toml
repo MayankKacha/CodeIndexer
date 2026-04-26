@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "code-indexer"
-version = "1.0.0"
-description = "Advanced code indexing platform with Graph + Hybrid Search + Re-ranking + Query-aware Compression + Caching"
+version = "1.1.0"
+description = "Code intelligence platform: Graph + Hybrid Search + Re-ranking + Query-aware Compression + Caching"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -18,8 +18,7 @@ dependencies = [
     "tree-sitter>=0.21.0",
     "tree-sitter-language-pack>=0.6.0",
 
-    # Graph database
-    "neo4j>=5.15.0",
+    # Graph database (in-memory default)
     "networkx>=3.0",
 
     # Vector database
@@ -62,14 +61,12 @@ dependencies = [
     "numpy>=1.24.0",
     "tiktoken>=0.5.0",
     "pathspec>=0.12.1",
-
-    # UI & Evaluation
-    "streamlit>=1.30.0",
-    "altair>=5.0.0",
-    "pandas>=2.0.0",
 ]
 
 [project.optional-dependencies]
+neo4j = [
+    "neo4j>=5.15.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",

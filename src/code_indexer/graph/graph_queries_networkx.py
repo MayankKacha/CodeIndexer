@@ -66,21 +66,31 @@ class GraphQueriesNetworkx:
             if (d.get("name") == name or d.get("qualified_name") == name)
             and (not repo_name or d.get("repo_name") == repo_name)
         ]
-        
+
+        seen: set = set()
         results = []
         for target in targets:
             callee_data = self.graph.nodes[target]
-            for u, v, key, edge_data in self.graph.in_edges(target, data=True, keys=True):
-                if edge_data.get("type") == "CALLS":
-                    caller_data = self.graph.nodes[u]
-                    results.append({
-                        "caller_name": caller_data.get("name"),
-                        "caller_qualified_name": caller_data.get("qualified_name"),
-                        "caller_type": caller_data.get("element_type"),
-                        "caller_file": caller_data.get("file_path"),
-                        "caller_line": caller_data.get("start_line"),
-                        "callee_name": callee_data.get("name"),
-                    })
+            for u, _v, _key, edge_data in self.graph.in_edges(target, data=True, keys=True):
+                if edge_data.get("type") != "CALLS":
+                    continue
+                caller_data = self.graph.nodes[u]
+                dedupe_key = (
+                    caller_data.get("qualified_name") or caller_data.get("name"),
+                    caller_data.get("file_path"),
+                    caller_data.get("start_line"),
+                )
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                results.append({
+                    "caller_name": caller_data.get("name"),
+                    "caller_qualified_name": caller_data.get("qualified_name"),
+                    "caller_type": caller_data.get("element_type"),
+                    "caller_file": caller_data.get("file_path"),
+                    "caller_line": caller_data.get("start_line"),
+                    "callee_name": callee_data.get("name"),
+                })
         return sorted(results, key=lambda x: (x.get("caller_file", ""), x.get("caller_line", 0)))
 
     def find_callees(self, name: str, repo_name: str = "") -> List[Dict]:
@@ -89,21 +99,31 @@ class GraphQueriesNetworkx:
             if (d.get("name") == name or d.get("qualified_name") == name)
             and (not repo_name or d.get("repo_name") == repo_name)
         ]
-        
+
+        seen: set = set()
         results = []
         for caller in callers:
             caller_data = self.graph.nodes[caller]
-            for u, v, key, edge_data in self.graph.out_edges(caller, data=True, keys=True):
-                if edge_data.get("type") == "CALLS":
-                    callee_data = self.graph.nodes[v]
-                    results.append({
-                        "callee_name": callee_data.get("name"),
-                        "callee_qualified_name": callee_data.get("qualified_name"),
-                        "callee_type": callee_data.get("element_type"),
-                        "callee_file": callee_data.get("file_path"),
-                        "callee_line": callee_data.get("start_line"),
-                        "caller_name": caller_data.get("name"),
-                    })
+            for _u, v, _key, edge_data in self.graph.out_edges(caller, data=True, keys=True):
+                if edge_data.get("type") != "CALLS":
+                    continue
+                callee_data = self.graph.nodes[v]
+                dedupe_key = (
+                    callee_data.get("qualified_name") or callee_data.get("name"),
+                    callee_data.get("file_path"),
+                    callee_data.get("start_line"),
+                )
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                results.append({
+                    "callee_name": callee_data.get("name"),
+                    "callee_qualified_name": callee_data.get("qualified_name"),
+                    "callee_type": callee_data.get("element_type"),
+                    "callee_file": callee_data.get("file_path"),
+                    "callee_line": callee_data.get("start_line"),
+                    "caller_name": caller_data.get("name"),
+                })
         return sorted(results, key=lambda x: (x.get("callee_file", ""), x.get("callee_line", 0)))
 
     # ── Call Chains ─────────────────────────────────────────────────────

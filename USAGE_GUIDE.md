@@ -1,6 +1,6 @@
 # 📖 CodeIndexer Usage Guide
 
-This guide provides a step-by-step walkthrough to get you from zero to a fully indexed, searchable, and benchmarked codebase using CodeIndexer.
+This guide provides a step-by-step walkthrough to get you from zero to a fully indexed and searchable codebase using CodeIndexer.
 
 ---
 
@@ -106,24 +106,7 @@ Ask questions directly to your codebase using the built-in RAG (Retrieval-Augmen
 
 ---
 
-## 📊 Step 6: Running Benchmarks (UI)
-
-CodeIndexer includes a powerful Streamlit dashboard to compare different retrieval architectures:
-
-1. **Launch the Dashboard:**
-   ```bash
-   codeindexer ui
-   ```
-
-2. **Interact:**
-   - Open [http://localhost:8501](http://localhost:8501) in your browser.
-   - Select your indexed repository.
-   - Enter a query in the chat box.
-   - **Observe the charts:** Compare token usage (Cost) and Relevance Scores (Quality).
-
----
-
-## 💥 Step 7: Graph & Impact Analysis
+## 💥 Step 6: Graph & Impact Analysis
 
 Leverage the power of the Neo4j graph to understand code relationships.
 
@@ -139,7 +122,7 @@ Leverage the power of the Neo4j graph to understand code relationships.
 
 ---
 
-## 🌐 Step 8: Starting the API Server
+## 🌐 Step 7: Starting the API Server
 
 If you want to integrate CodeIndexer into your own applications:
 
@@ -161,7 +144,7 @@ If you want to integrate CodeIndexer into your own applications:
 | `search` | Multi-stage hybrid retrieval |
 | `ask` | Conversational interface for code |
 | `recommend` | AI-driven feature implementation plans |
-| `ui` | Visual benchmarking & dashboard |
+| `serve` | Start the FastAPI server (used by the VS Code extension over MCP) |
 | `callers/callees` | Navigate the call graph |
 | `impact` | Change propagation analysis |
 | `list` | Show all indexed projects |

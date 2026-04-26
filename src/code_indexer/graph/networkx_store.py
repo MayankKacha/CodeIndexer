@@ -35,9 +35,36 @@ class NetworkxStore:
                 with open(self.persist_path, "rb") as f:
                     self.graph = pickle.load(f)
                 logger.debug(f"Loaded graph with {self.graph.number_of_nodes()} nodes")
+                self._dedupe_edges()
             except Exception as e:
                 logger.error(f"Failed to load graph: {e}")
                 self.graph = nx.MultiDiGraph()
+
+    def _dedupe_edges(self):
+        """Collapse parallel edges of the same `type` into a single keyed edge.
+
+        Older graphs were stored without an edge key, so re-indexing produced
+        parallel CALLS/HAS_METHOD/etc. edges between the same nodes. This
+        rebuilds each unique (u, v, type) once.
+        """
+        seen = set()
+        rebuilt = nx.MultiDiGraph()
+        for n, d in self.graph.nodes(data=True):
+            rebuilt.add_node(n, **d)
+        removed = 0
+        kept = 0
+        for u, v, d in self.graph.edges(data=True):
+            t = d.get("type", "EDGE")
+            if (u, v, t) in seen:
+                removed += 1
+                continue
+            seen.add((u, v, t))
+            rebuilt.add_edge(u, v, key=t, **d)
+            kept += 1
+        if removed:
+            logger.info(f"Deduplicated graph: kept {kept} edges, removed {removed} duplicates")
+            self.graph = rebuilt
+            self._save()
 
     def _save(self):
         """Save graph to disk."""
@@ -86,8 +113,9 @@ class NetworkxStore:
 
             # Repo -> File
             repo_id = f"repo:{el.repo_name}"
-            self.graph.add_edge(repo_id, el.element_id, type="CONTAINS_FILE")
-            rels_created += 1
+            if not self.graph.has_edge(repo_id, el.element_id, key="CONTAINS_FILE"):
+                self.graph.add_edge(repo_id, el.element_id, key="CONTAINS_FILE", type="CONTAINS_FILE")
+                rels_created += 1
 
         # Create relationships
         element_by_name: dict[str, str] = {}
@@ -102,8 +130,9 @@ class NetworkxStore:
         for el in elements:
             # Class -> Method
             if el.parent_element_id and self.graph.has_node(el.parent_element_id):
-                self.graph.add_edge(el.parent_element_id, el.element_id, type="HAS_METHOD")
-                rels_created += 1
+                if not self.graph.has_edge(el.parent_element_id, el.element_id, key="HAS_METHOD"):
+                    self.graph.add_edge(el.parent_element_id, el.element_id, key="HAS_METHOD", type="HAS_METHOD")
+                    rels_created += 1
 
             # Calls
             for call_name in el.calls:
@@ -114,16 +143,18 @@ class NetworkxStore:
                         target_id = element_by_name.get(short_name)
 
                 if target_id and target_id != el.element_id:
-                    self.graph.add_edge(el.element_id, target_id, type="CALLS")
-                    rels_created += 1
+                    if not self.graph.has_edge(el.element_id, target_id, key="CALLS"):
+                        self.graph.add_edge(el.element_id, target_id, key="CALLS", type="CALLS")
+                        rels_created += 1
 
             # Inherits
             if el.element_type == "class" and el.inherits_from:
                 for parent_name in el.inherits_from:
                     parent_id = class_elements.get(parent_name)
                     if parent_id:
-                        self.graph.add_edge(el.element_id, parent_id, type="INHERITS")
-                        rels_created += 1
+                        if not self.graph.has_edge(el.element_id, parent_id, key="INHERITS"):
+                            self.graph.add_edge(el.element_id, parent_id, key="INHERITS", type="INHERITS")
+                            rels_created += 1
 
         self._save()
         logger.info(f"Stored {nodes_created} nodes, {rels_created} relationships in NetworkX")

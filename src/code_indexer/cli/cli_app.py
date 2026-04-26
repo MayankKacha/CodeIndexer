@@ -420,31 +420,6 @@ def list_repos(verbose: bool = typer.Option(False, "--verbose", "-v")):
 
 
 @app.command()
-def ui(
-    port: int = typer.Option(8501, "--port", "-p", help="Port for the Streamlit UI"),
-):
-    """🖥️ Launch the interactive Evaluation & Benchmarking Dashboard."""
-    import subprocess
-    from pathlib import Path
-    
-    ui_path = Path(__file__).resolve().parent.parent.parent.parent / "ui" / "app.py"
-    
-    console.print(
-        Panel(
-            f"[bold cyan]Starting CodeIndexer Evaluator UI on http://localhost:{port}[/bold cyan]\n"
-            f"Evaluating: Baseline vs CodeGraphContext vs CodeIndexer",
-            title="🖥️ UI Dashboard",
-            border_style="cyan",
-        )
-    )
-    
-    try:
-        subprocess.run(["streamlit", "run", str(ui_path), "--server.port", str(port)])
-    except KeyboardInterrupt:
-        console.print("\n[yellow]UI stopped.[/yellow]")
-
-
-@app.command()
 def delete(
     repo_name: str = typer.Argument(..., help="Repository name to delete"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),

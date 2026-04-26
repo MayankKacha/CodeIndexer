@@ -1,8 +1,8 @@
-# 🔍 CodeIndexer — Advanced Code Intelligence Platform
+# 🔍 CodeIndexer — Code Intelligence Platform
 
 > **Graph + Hybrid Search + Re-ranking + Query-Aware Compression + Caching**
 
-CodeIndexer is a powerful code indexing and search platform that goes far beyond traditional code search. It parses codebases into atomic function/method/class-level chunks, stores them in both a **graph database** (Neo4j) and a **vector database** (Milvus), and provides **hybrid search** combining BM25 keyword matching, semantic vector search, and graph traversal — all enhanced with **cross-encoder re-ranking** and **query-aware LLM compression** to dramatically reduce token usage for AI assistants.
+CodeIndexer parses codebases into atomic function/method/class-level chunks, stores them in a **graph database** (NetworkX in-memory by default, Neo4j optional) and a **vector database** (Milvus Lite), and provides **hybrid search** combining BM25 keyword matching, semantic vector search, and graph traversal — enhanced with **cross-encoder re-ranking** and **query-aware LLM compression** to reduce token usage for AI assistants. It ships with a FastAPI server consumed by the bundled VS Code extension over MCP.
 
 ## ✨ Key Features
 
@@ -101,12 +101,11 @@ pip install -e .
 | `CacheManager` | `cache/cache_manager.py` | Disk-backed cache using `diskcache`. Stores search results, embeddings, compressions, file hashes, and repo metadata. |
 | `Settings` | `config/settings.py` | Pydantic-based configuration. Loads from `.env` file. Controls all model names, weights, paths, and API keys. |
 
-### API & UI Layer
+### API Layer
 
 | Class | File | Description |
 |-------|------|-------------|
-| `FastAPI app` | `api/server.py` | REST API with SSE indexing progress, streaming chat, analytics, and repository management endpoints. |
-| `React Dashboard` | `web/` | Full Vite + React app with 4 pages: Index, Chat, Dashboard, Repositories. |
+| `FastAPI app` | `api/server.py` | REST API with SSE indexing progress, streaming chat, analytics, and repository management endpoints. Used by the VS Code extension over MCP. |
 
 ---
 
@@ -302,7 +301,7 @@ Python, JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, S
 ## 📦 Dependencies
 
 - **Parsing**: tree-sitter, tree-sitter-language-pack
-- **Graph**: neo4j
+- **Graph**: networkx (default, in-memory). Neo4j is optional: `pip install -e ".[neo4j]"`
 - **Vectors**: pymilvus, transformers (CodeBERT), torch
 - **Search**: rank-bm25, sentence-transformers (CrossEncoder)
 - **LLM**: openai, tiktoken
