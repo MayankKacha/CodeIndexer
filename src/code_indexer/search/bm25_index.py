@@ -196,3 +196,47 @@ class BM25Index:
     def size(self) -> int:
         """Number of documents in the index."""
         return len(self._element_ids)
+
+    def update_file(
+        self,
+        repo_name: str,
+        file_path: str,
+        new_elements: List[CodeElement],
+    ) -> None:
+        """Replace all entries for one file with `new_elements` and rebuild.
+
+        Drops every existing document whose stored metadata matches
+        (repo_name, file_path), appends the new elements, and re-fits BM25.
+        """
+        from rank_bm25 import BM25Okapi
+
+        keep_docs: List[str] = []
+        keep_ids: List[str] = []
+        keep_tokens: List[List[str]] = []
+        keep_data: Dict[str, Dict] = {}
+
+        for i, eid in enumerate(self._element_ids):
+            data = self._element_data.get(eid, {})
+            if data.get("repo_name") == repo_name and data.get("file_path") == file_path:
+                continue
+            keep_docs.append(self._documents[i])
+            keep_ids.append(eid)
+            keep_tokens.append(self._tokenized_corpus[i])
+            keep_data[eid] = data
+
+        for el in new_elements:
+            text = el.to_search_text()
+            keep_docs.append(text)
+            keep_ids.append(el.element_id)
+            keep_tokens.append(_tokenize(text))
+            keep_data[el.element_id] = el.to_display_dict()
+
+        self._documents = keep_docs
+        self._element_ids = keep_ids
+        self._tokenized_corpus = keep_tokens
+        self._element_data = keep_data
+        self._bm25 = BM25Okapi(keep_tokens) if keep_tokens else None
+        logger.info(
+            f"BM25 updated for {repo_name}:{file_path} "
+            f"(+{len(new_elements)} elements, total={len(keep_ids)})"
+        )

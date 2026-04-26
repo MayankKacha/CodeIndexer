@@ -140,6 +140,55 @@ async def index_codebase(request: IndexRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+# ── Per-file incremental reindex ──────────────────────────────────────
+
+
+class FileIndexRequest(BaseModel):
+    repo_name: str = Field(..., description="Repository name")
+    file_path: str = Field(..., description="Absolute or repo-relative file path")
+    repo_root: str = Field(default="", description="Optional explicit repo root (used on first call)")
+
+
+@app.post("/api/index/file", tags=["Indexing"])
+async def reindex_file(request: FileIndexRequest):
+    """Re-index a single file. Hash-skips when content is unchanged.
+
+    Used by the VS Code extension's file watcher: cheap to call on every save.
+    """
+    pipeline = get_pipeline()
+    try:
+        result = await asyncio.to_thread(
+            pipeline.index_file,
+            repo_name=request.repo_name,
+            file_path=request.file_path,
+            repo_root=request.repo_root or None,
+        )
+        if result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=result.get("error", "unknown"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"File reindex failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/index/file", tags=["Indexing"])
+async def remove_file(repo_name: str, file_path: str):
+    """Remove all index entries for a deleted file."""
+    pipeline = get_pipeline()
+    try:
+        result = await asyncio.to_thread(pipeline.remove_file, repo_name, file_path)
+        if result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=result.get("error", "unknown"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"File removal failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Chat with Streaming ───────────────────────────────────────────────
 
 

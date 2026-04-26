@@ -450,6 +450,100 @@ class CodeIndexerPipeline:
 
         return stats
 
+    # ── Per-file incremental update ─────────────────────────────────────
+
+    def index_file(
+        self,
+        repo_name: str,
+        file_path: str,
+        repo_root: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Re-index a single file. Hash-skips when the file is unchanged.
+
+        Resolves repo_root from cached repo metadata when not provided.
+        Returns a dict describing what happened: {status, elements, ...}.
+        """
+        meta = self.cache.get_repo_metadata(repo_name)
+        root = Path(repo_root) if repo_root else (
+            Path(meta["stats"]["local_repo_path"]) if meta and meta.get("stats", {}).get("local_repo_path") else None
+        )
+        if root is None:
+            return {"status": "error", "error": f"Unknown repo: {repo_name}. Run a full index first."}
+
+        abs_path = Path(file_path)
+        if not abs_path.is_absolute():
+            abs_path = (root / file_path).resolve()
+        try:
+            relative_path = str(abs_path.relative_to(root))
+        except ValueError:
+            return {"status": "error", "error": f"File not under repo root: {abs_path}"}
+
+        if not abs_path.exists():
+            return self.remove_file(repo_name, relative_path)
+
+        current_hash = self._file_content_hash(abs_path)
+        cached_hash = self.cache.get_file_hash(repo_name, relative_path)
+        if cached_hash == current_hash:
+            return {"status": "unchanged", "file": relative_path}
+
+        from code_indexer.parsing.code_splitter import split_file
+
+        parsed = split_file(abs_path, repo_name=repo_name, repo_root=root)
+        elements = parsed.elements
+
+        # Drop the old, write the new. Empty `elements` is a valid case
+        # (e.g., file became all comments) — we still clear stale entries.
+        self.graph_store.clear_file(repo_name, relative_path)
+        self.milvus_store.delete_by_file(repo_name, relative_path)
+
+        if elements:
+            embedding_texts = [el.to_embedding_text() for el in elements]
+            embeddings = self.encoder.encode_batch(embedding_texts)
+            self.cache.set_embeddings_batch(embedding_texts, embeddings)
+            self.graph_store.store_elements(elements)
+            self.milvus_store.insert_elements(elements, embeddings)
+
+        self.bm25_index.update_file(repo_name, relative_path, elements)
+        bm25_path = Path(self.settings.cache_dir) / "bm25_index.pkl"
+        self.bm25_index.save(bm25_path)
+
+        self.cache.set_file_hash(repo_name, relative_path, current_hash)
+        self.cache.invalidate_repo(repo_name)
+
+        return {
+            "status": "reindexed",
+            "file": relative_path,
+            "elements": len(elements),
+            "language": parsed.language,
+        }
+
+    def remove_file(self, repo_name: str, file_path: str) -> Dict[str, Any]:
+        """Remove all index entries for a deleted file."""
+        meta = self.cache.get_repo_metadata(repo_name)
+        if not meta:
+            return {"status": "error", "error": f"Unknown repo: {repo_name}"}
+
+        rel = file_path
+        root_str = meta.get("stats", {}).get("local_repo_path")
+        if root_str:
+            try:
+                p = Path(file_path)
+                if p.is_absolute():
+                    rel = str(p.relative_to(Path(root_str)))
+            except ValueError:
+                pass
+
+        self.graph_store.clear_file(repo_name, rel)
+        self.milvus_store.delete_by_file(repo_name, rel)
+        self.bm25_index.update_file(repo_name, rel, [])
+        bm25_path = Path(self.settings.cache_dir) / "bm25_index.pkl"
+        self.bm25_index.save(bm25_path)
+
+        self.cache.set_file_hash(repo_name, rel, "")
+        self.cache.invalidate_repo(repo_name)
+
+        return {"status": "removed", "file": rel}
+
     # ── Search ──────────────────────────────────────────────────────────
 
     def search(

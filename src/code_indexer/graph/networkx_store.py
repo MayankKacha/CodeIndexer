@@ -89,6 +89,17 @@ class NetworkxStore:
         logger.info(f"Cleared graph data for repository: {repo_name}")
         self._save()
 
+    def clear_file(self, repo_name: str, file_path: str):
+        """Remove all CodeElement nodes for a single file in a repository."""
+        nodes_to_remove = [
+            n for n, d in self.graph.nodes(data=True)
+            if d.get("repo_name") == repo_name and d.get("file_path") == file_path
+        ]
+        if nodes_to_remove:
+            self.graph.remove_nodes_from(nodes_to_remove)
+            self._save()
+            logger.info(f"Cleared {len(nodes_to_remove)} graph nodes for {repo_name}:{file_path}")
+
     def store_elements(self, elements: List[CodeElement]) -> dict:
         """Store a batch of code elements and their relationships."""
         if not elements:

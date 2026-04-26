@@ -1,0 +1,94 @@
+{
+  "name": "codeindexer-mcp",
+  "displayName": "CodeIndexer MCP",
+  "description": "Auto-indexing code intelligence for VS Code: hybrid search, graph traversal, impact analysis, and RAG over your codebase via MCP.",
+  "version": "0.2.0",
+  "publisher": "MayankKacha",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codeindexer/codeindexer"
+  },
+  "bugs": {
+    "url": "https://github.com/codeindexer/codeindexer/issues"
+  },
+  "homepage": "https://github.com/codeindexer/codeindexer#readme",
+  "keywords": [
+    "mcp",
+    "code search",
+    "semantic search",
+    "code graph",
+    "code indexer",
+    "ai",
+    "llm",
+    "copilot",
+    "model context protocol"
+  ],
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "codeindexer-mcp-provider",
+        "label": "CodeIndexer MCP"
+      }
+    ],
+    "commands": [
+      {
+        "command": "codeindexer.startServer",
+        "title": "CodeIndexer: Start API Server"
+      },
+      {
+        "command": "codeindexer.stopServer",
+        "title": "CodeIndexer: Stop API Server"
+      }
+    ],
+    "configuration": {
+      "title": "CodeIndexer MCP",
+      "properties": {
+        "codeindexer.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Python executable. Leave empty for auto-detection."
+        },
+        "codeindexer.apiPort": {
+          "type": "number",
+          "default": 8000,
+          "description": "Port for the CodeIndexer API server."
+        },
+        "codeindexer.autoStartServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the API server automatically when the extension activates. Disable this if you only want the server to start on demand (when an MCP tool is used or a CodeIndexer command is run)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node scripts/bundle-python.js && node esbuild.js",
+    "watch": "node scripts/bundle-python.js && node esbuild.js --watch",
+    "package": "npx -y @vscode/vsce package --no-dependencies",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.99.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.24.0"
+  }
+}

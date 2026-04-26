@@ -238,6 +238,18 @@ class MilvusStore:
         except Exception as e:
             logger.error(f"Failed to delete Milvus data: {e}")
 
+    def delete_by_file(self, repo_name: str, file_path: str):
+        """Delete all elements for a single file in a repository."""
+        try:
+            escaped = file_path.replace('"', '\\"')
+            self.client.delete(
+                collection_name=self.collection_name,
+                filter=f'repo_name == "{repo_name}" and file_path == "{escaped}"',
+            )
+            logger.info(f"Deleted Milvus data for {repo_name}:{file_path}")
+        except Exception as e:
+            logger.error(f"Failed to delete Milvus file data: {e}")
+
     def get_element_count(self, repo_name: str = "") -> int:
         """Get the number of elements in the collection."""
         try:
