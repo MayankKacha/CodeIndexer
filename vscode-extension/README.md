@@ -1,97 +1,167 @@
-# CodeIndexer MCP — VS Code Extension
+# CodeIndexer — Code Graph & Impact Analysis for AI
 
-A VS Code extension that exposes your CodeIndexer's graph search and semantic search capabilities as **MCP (Model Context Protocol) tools**, making them available to any LLM running in VS Code (GitHub Copilot, Gemini, etc.).
+**Self-hosted code intelligence over MCP.** Indexes your repo into a hybrid graph + vector + keyword index so Copilot, Claude, Gemini, and Cursor can answer *"what calls this?"*, *"what breaks if I change X?"*, and *"where do I add Redis?"* with grounded, line-level citations — not hallucinations.
 
-## Features
+---
 
-### 10 MCP Tools
+## Why CodeIndexer?
 
-The toolset is split between cheap **discovery** tools (compact metadata) and targeted **content** tools (full source code), so an LLM can navigate a codebase without burning context tokens until it needs the actual implementation.
+LLMs are great at reasoning about code, but they need *facts* about your repo first. Without grounding:
 
-| Tool | Returns | What it's for |
-|------|---------|---------------|
-| **`codebase_overview`** | Per-repo stats, languages, semantic confidence | First call — see what's indexed |
-| **`search_code`** | Compact metadata, no source | Semantic search by natural-language query |
-| **`find_symbol`** | Compact metadata, no source | Find functions/classes by exact or partial name |
-| **`get_code`** | Full source code | Fetch implementation of a specific element |
-| **`get_callers`** | Caller list, no source | Who calls this function? |
-| **`get_callees`** | Callee list, no source | What does this function call? |
-| **`get_impact`** | Direct + transitive callers, affected files | "If I change X, what else might break?" |
-| **`get_call_chain`** | Shortest call path A → B | How are two functions connected? |
-| **`get_file_structure`** | All elements in a file with signatures | Understand a file before reading it |
-| **`find_dead_code`** | Functions with zero callers | Cleanup / orphan detection |
+- "What calls `process_payment`?" → hallucinated callers
+- "Where should I add a Redis cache?" → generic boilerplate
+- "Is `legacy_auth` still used?" → wrong answer, no citations
 
-### Semantic Confidence Scoring
+CodeIndexer gives your LLM a real call graph, a semantic vector index, and a keyword index over your entire codebase — all exposed as MCP tools, available inside VS Code with zero manual setup.
 
-The extension automatically computes a **semantic confidence score (0–1)** based on how many code elements have meaningful comments/docstrings:
+---
 
-- **Score = 0.8** → 80% of functions have docs → semantic search is highly reliable
-- **Score = 0.2** → only 20% have docs → graph search gets 80% weight in hybrid mode
+## Zero-Install Setup
 
-## Installation
+Open VS Code in any repo → the extension handles everything:
 
-The extension ships with the CodeIndexer Python source bundled. On first activation it creates a managed virtual environment in VS Code's global storage and pip-installs everything for you. You only need:
+1. **Detects bundled Python source** → creates a managed virtual environment in VS Code's global storage
+2. **Installs all dependencies automatically** (pip, models — one-time, ~5–10 min)
+3. **Auto-indexes your workspace** in the background on first open
+4. **File watcher** — every save/create/delete triggers an incremental reindex of just that file (SHA-256 hash-checked, so unchanged saves are instant no-ops)
 
-- **Python 3.10+** on your `PATH`
-- **Node.js** (only required if you're building the extension from source)
+You need: **Python 3.10+** on your `PATH`. That's it.
 
-### From source
+---
 
-```bash
-cd vscode-extension
-npm install
-npm run compile
-npm run package
-code --install-extension codeindexer-mcp-0.2.0.vsix
-```
+## 13 MCP Tools
 
-### What happens on first activation
+Discovery tools return compact metadata (no source code) so the LLM can navigate cheaply. Content tools fetch the full implementation only when needed.
 
-1. Bundled Python source is detected → managed venv is created and dependencies are installed (one-time, ~5–10 min, mostly model downloads).
-2. The FastAPI server starts on port 8000 (or a free ephemeral port if 8000 is busy).
-3. Your current workspace is **auto-indexed** in the background — no command to run.
-4. A file watcher kicks in: every save / create / delete triggers an incremental reindex of just that file. The Python side hash-checks first, so saves with no real changes are no-ops.
+### Discovery
+
+| Tool | What it answers |
+|------|----------------|
+| `codebase_overview` | What languages, how many elements, how reliable is semantic search? |
+| `search_code` | *"Find functions that handle authentication"* — hybrid semantic + keyword |
+| `find_symbol` | *"Find the class named UserRepository"* — by exact or partial name |
+| `get_callers` | *"What calls `save_to_db`?"* — direct callers with file + line |
+| `get_callees` | *"What does `process_order` call?"* — outgoing call list |
+| `get_impact` | *"What breaks if I change `validate_token`?"* — transitive impact + affected files |
+| `get_call_chain` | *"How are `main` and `send_email` connected?"* — shortest call path |
+| `get_file_structure` | *"What's in `auth/middleware.py`?"* — all elements with signatures |
+| `find_dead_code` | *"Any functions with zero callers?"* — orphan detection |
+
+### Content
+
+| Tool | What it returns |
+|------|----------------|
+| `get_code` | Full source of a specific function, method, or class |
+
+### Test Coverage
+
+| Tool | What it answers |
+|------|----------------|
+| `tests_for` | *"Which tests cover `calculate_discount`?"* — walks test→source edges |
+| `tested_by` | *"What source does `test_checkout_flow` exercise?"* |
+
+### Diff Analysis
+
+| Tool | What it answers |
+|------|----------------|
+| `diff_impact` | Given a unified diff or two git refs, which elements are touched and who calls them? Designed for PR-review agents. |
+
+---
+
+## Example Conversations
+
+> **You:** *"I want to add Redis caching to the order service. Where exactly?"*
+>
+> **LLM (using CodeIndexer):** Calls `search_code("order service data fetch")`, then `get_callers("get_order")`, then `get_impact("get_order")` → returns exact file paths and line numbers where a cache layer would intercept the most traffic.
+
+---
+
+> **You:** *"Is `legacy_report_builder` still used anywhere?"*
+>
+> **LLM:** Calls `get_callers("legacy_report_builder")` → zero results → cross-checks `find_dead_code` → confirms it's safe to delete.
+
+---
+
+> **You:** *"What tests cover the payment flow?"*
+>
+> **LLM:** Calls `tests_for("process_payment")` → returns test file, line numbers, and test function names.
+
+---
 
 ## How It Works
 
 ```
-LLM (Copilot/Gemini) → MCP Protocol → MCP Server (Node.js, stdio)
-                                            ↓ HTTP
-                                    Python CodeIndexer API (FastAPI)
-                                            ↓
-                              ┌──────────────┼──────────────┐
-                          NetworkX       Milvus Lite      BM25
-                         (Graph DB)    (Vector DB)     (Keyword)
+LLM (Copilot / Claude / Gemini)
+        │  MCP Protocol (stdio)
+        ▼
+  MCP Server (Node.js)
+        │  HTTP
+        ▼
+  CodeIndexer API (FastAPI, Python)
+        │
+   ┌────┼─────────────┐
+   ▼    ▼             ▼
+NetworkX  Milvus Lite  BM25
+(call graph) (vectors) (keywords)
 ```
 
-1. Extension activates → spawns Python CodeIndexer API server
-2. Registers MCP server definition → VS Code discovers 3 tools
-3. LLM calls MCP tools → MCP server → Python API → search results
+- **Tree-sitter** parses Python, TypeScript, JavaScript, Java, C#, Go, Rust into `CodeElement`s
+- **NetworkX** stores `CALLS`, `HAS_METHOD`, `INHERITS`, and `TESTS` edges for graph queries
+- **Milvus Lite** stores 768-dim embeddings for semantic search
+- **BM25** (rank-bm25) handles exact keyword and identifier search
+- **Reciprocal Rank Fusion** merges results from all three indexes
+
+---
 
 ## Configuration
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `codeindexer.pythonPath` | Auto-detect | Path to Python executable |
+| `codeindexer.pythonPath` | Auto-detect | Path to Python 3.10+ executable |
 | `codeindexer.apiPort` | `8000` | Port for the CodeIndexer API server |
-| `codeindexer.autoStartServer` | `true` | Auto-start API server on activation |
+| `codeindexer.autoStartServer` | `true` | Start server automatically on activation |
+
+---
 
 ## Commands
 
-Indexing is automatic; these are escape hatches.
+Indexing is fully automatic. These are escape hatches:
 
-- **CodeIndexer: Start API Server** — Restart the API server if it was stopped
-- **CodeIndexer: Stop API Server** — Stop the API server (also stops the file watcher)
+| Command | When to use |
+|---------|-------------|
+| **CodeIndexer: Start API Server** | Restart after a manual stop |
+| **CodeIndexer: Stop API Server** | Shut down server and file watcher |
 
-## Development
+---
+
+## Requirements
+
+- VS Code 1.99+
+- Python 3.10 or later on your `PATH`
+- ~500 MB disk space for the managed venv and vector index (first-time setup)
+
+---
+
+## Building from Source
 
 ```bash
-# Watch mode (auto-rebuild on changes)
-npm run watch
-
-# Type check
-npx tsc --noEmit
-
-# Package VSIX
-npm run package
+cd vscode-extension
+npm install
+npm run compile   # bundles Python source + compiles TypeScript
+npm run package   # produces codeindexer-mcp-x.x.x.vsix
+code --install-extension codeindexer-mcp-*.vsix
 ```
+
+---
+
+## Supported Languages
+
+Python · TypeScript · JavaScript · Java · C# · Go · Rust
+
+More via tree-sitter grammar additions — contributions welcome.
+
+---
+
+## Feedback & Issues
+
+[github.com/codeindexer/codeindexer/issues](https://github.com/codeindexer/codeindexer/issues)
