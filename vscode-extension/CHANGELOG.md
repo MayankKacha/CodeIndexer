@@ -2,6 +2,11 @@
 
 All notable changes to CodeIndexer MCP are documented here.
 
+## [0.2.2] — 2026-04-28
+
+### Fixed
+- **Windows `py` launcher support** — `findSystemPython` (managed-venv bootstrap) now falls back to `py -3.13` … `py -3` when `python` / `python3` are not on PATH, which is the default state on a fresh Windows install. `detectPythonPath` (server startup) probes its fallback candidates with `spawnSync('--version')` and includes `py` on Windows.
+
 ## [0.2.1] — 2026-04-26
 
 ### Added

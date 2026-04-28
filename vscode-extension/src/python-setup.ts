@@ -27,17 +27,31 @@ export function isManagedVenvReady(globalStoragePath: string): boolean {
     return fs.existsSync(getManagedPythonPath(globalStoragePath));
 }
 
+export interface PythonCommand {
+    cmd: string;
+    args: string[];
+}
+
 /**
  * Find a system Python 3.10+ suitable for creating a venv.
+ *
+ * On Windows, Python is often only on PATH as the `py` launcher rather than
+ * `python` / `python3`, so we try both forms.
  */
-export async function findSystemPython(): Promise<string | null> {
-    const candidates = [
+export async function findSystemPython(): Promise<PythonCommand | null> {
+    const direct = [
         'python3.13', 'python3.12', 'python3.11', 'python3.10',
         'python3', 'python',
     ];
-    for (const py of candidates) {
-        if (await canRun(py, ['--version'])) return py;
+    for (const cmd of direct) {
+        if (await canRun(cmd, ['--version'])) return { cmd, args: [] };
     }
+
+    const launcherVersions = ['-3.13', '-3.12', '-3.11', '-3.10', '-3'];
+    for (const v of launcherVersions) {
+        if (await canRun('py', [v, '--version'])) return { cmd: 'py', args: [v] };
+    }
+
     return null;
 }
 
@@ -64,14 +78,15 @@ export async function setupManagedVenv(
         onLog('[Setup] Install Python from https://python.org then try again.');
         return false;
     }
-    onLog(`[Setup] Using system Python: ${sysPython}`);
+    const sysPythonDisplay = [sysPython.cmd, ...sysPython.args].join(' ');
+    onLog(`[Setup] Using system Python: ${sysPythonDisplay}`);
     onLog(`[Setup] Creating virtual environment at: ${venvPath}`);
 
     if (fs.existsSync(venvPath)) {
         fs.rmSync(venvPath, { recursive: true, force: true });
     }
 
-    const venvOk = await runProcess(sysPython, ['-m', 'venv', venvPath], onLog);
+    const venvOk = await runProcess(sysPython.cmd, [...sysPython.args, '-m', 'venv', venvPath], onLog);
     if (!venvOk) {
         onLog('[Setup] Failed to create virtual environment.');
         return false;

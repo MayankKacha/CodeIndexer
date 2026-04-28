@@ -5,7 +5,7 @@
  * and handles graceful shutdown.
  */
 
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, spawn, spawnSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -54,7 +54,20 @@ export function detectPythonPath(workspaceRoot: string): string {
         }
     }
 
-    return isWin ? 'python' : 'python3';
+    const fallbacks = isWin ? ['python', 'python3', 'py'] : ['python3', 'python'];
+    for (const cmd of fallbacks) {
+        if (canRunSync(cmd)) return cmd;
+    }
+    return fallbacks[0];
+}
+
+function canRunSync(cmd: string): boolean {
+    try {
+        const r = spawnSync(cmd, ['--version'], { stdio: 'ignore' });
+        return r.status === 0;
+    } catch {
+        return false;
+    }
 }
 
 /**

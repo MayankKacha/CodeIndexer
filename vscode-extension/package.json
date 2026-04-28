@@ -2,7 +2,7 @@
   "name": "codeindexer-mcp",
   "displayName": "CodeIndexer — Code Graph & Impact Analysis for AI",
   "description": "Self-hosted code intelligence over MCP. Indexes your repo into a hybrid graph + vector + keyword index so Copilot, Claude, and Cursor can answer 'what calls this?', 'what breaks if I change X?', and 'where do I add Redis?' with grounded citations — not vibes. Auto-indexes on open, reindexes on save, ships with a bundled Python venv (zero manual install).",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "MayankKacha",
   "license": "MIT",
   "icon": "images/icon.png",
